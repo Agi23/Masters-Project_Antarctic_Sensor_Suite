@@ -23,7 +23,11 @@
 //
 
 #include <algorithm>
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <termios.h>
+#include <unistd.h>
 #include "lvx_file.h"
 #include "cmdline.h"
 
@@ -39,10 +43,115 @@ int lvx_file_save_time = 10;
 bool is_finish_extrinsic_parameter = false;
 bool is_read_extrinsic_from_xml = false;
 uint8_t connected_lidar_count = 0;
+std::string arduino_port;
+int arduino_baud = 115200;
+int arduino_fd = -1;
 
 #define FRAME_RATE 20
 
+typedef enum {
+  kOutputLvx = 0,
+  kOutputPcd = 1,
+} OutputFormat;
+
+OutputFormat output_format = kOutputLvx;
+
+/**
+ * Mount correction for an upside-down sensor:
+ * 180 deg roll around X axis.
+ * This is applied once to extrinsic metadata (not per point).
+ */
+constexpr float kMountRollOffsetDeg = 0.0f;
+constexpr float kMountPitchOffsetDeg = 0.0f;
+constexpr float kMountYawOffsetDeg = 0.0f;
+
 using namespace std::chrono;
+
+static void ApplyMountCorrection(LvxDeviceInfo &lidar_info) {
+  lidar_info.roll += kMountRollOffsetDeg;
+  lidar_info.pitch += kMountPitchOffsetDeg;
+  lidar_info.yaw += kMountYawOffsetDeg;
+}
+
+static speed_t ToPosixBaud(int baud) {
+  switch (baud) {
+    case 9600: return B9600;
+    case 19200: return B19200;
+    case 38400: return B38400;
+    case 57600: return B57600;
+    case 115200: return B115200;
+    case 230400: return B230400;
+    default: return B115200;
+  }
+}
+
+static bool OpenArduinoSerial() {
+  if (arduino_port.empty()) {
+    return false;
+  }
+
+  arduino_fd = open(arduino_port.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+  if (arduino_fd < 0) {
+    printf("Failed to open Arduino serial port %s: %s\n", arduino_port.c_str(), strerror(errno));
+    return false;
+  }
+
+  termios tty;
+  memset(&tty, 0, sizeof(tty));
+  if (tcgetattr(arduino_fd, &tty) != 0) {
+    printf("Failed to get serial attributes for %s: %s\n", arduino_port.c_str(), strerror(errno));
+    close(arduino_fd);
+    arduino_fd = -1;
+    return false;
+  }
+
+  cfmakeraw(&tty);
+  speed_t speed = ToPosixBaud(arduino_baud);
+  cfsetispeed(&tty, speed);
+  cfsetospeed(&tty, speed);
+  tty.c_cflag |= (CLOCAL | CREAD);
+  tty.c_cflag &= ~CSTOPB;
+  tty.c_cflag &= ~CRTSCTS;
+  tty.c_cflag &= ~PARENB;
+  tty.c_cflag &= ~CSIZE;
+  tty.c_cflag |= CS8;
+  tty.c_cc[VMIN] = 0;
+  tty.c_cc[VTIME] = 1;
+
+  if (tcsetattr(arduino_fd, TCSANOW, &tty) != 0) {
+    printf("Failed to set serial attributes for %s: %s\n", arduino_port.c_str(), strerror(errno));
+    close(arduino_fd);
+    arduino_fd = -1;
+    return false;
+  }
+
+  tcflush(arduino_fd, TCIOFLUSH);
+  printf("Arduino serial connected: %s @ %d baud\n", arduino_port.c_str(), arduino_baud);
+  return true;
+}
+
+static void CloseArduinoSerial() {
+  if (arduino_fd >= 0) {
+    close(arduino_fd);
+    arduino_fd = -1;
+  }
+}
+
+static bool NotifyArduinoFrameComplete() {
+  if (arduino_fd < 0) {
+    return false;
+  }
+
+  const char trigger = 'F';
+  if (write(arduino_fd, &trigger, 1) < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+    return false;
+  }
+  const char newline = '\n';
+  if (write(arduino_fd, &newline, 1) < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+    return false;
+  }
+  return true;
+}
 
 /** Connect all the broadcast device in default and connect specific device when use program options or broadcast_code_list is not empty. */
 std::vector<std::string> broadcast_code_list = {
@@ -121,6 +230,7 @@ void OnGetLidarExtrinsicParameter(livox_status status, uint8_t handle, LidarGetE
       lidar_info.x = static_cast<float>(response->x / 1000.0);
       lidar_info.y = static_cast<float>(response->y / 1000.0);
       lidar_info.z = static_cast<float>(response->z / 1000.0);
+      ApplyMountCorrection(lidar_info);
       lvx_file_handler.AddDeviceInfo(lidar_info);
       if (lvx_file_handler.GetDeviceInfoListSize() == connected_lidar_count) {
         is_finish_extrinsic_parameter = true;
@@ -137,6 +247,7 @@ void OnGetLidarExtrinsicParameter(livox_status status, uint8_t handle, LidarGetE
 void LidarGetExtrinsicFromXml(uint8_t handle) {
   LvxDeviceInfo lidar_info;
   ParseExtrinsicXml(devices[handle], lidar_info);
+  ApplyMountCorrection(lidar_info);
   lvx_file_handler.AddDeviceInfo(lidar_info);
   lidar_info.extrinsic_enable = true;
   if (lvx_file_handler.GetDeviceInfoListSize() == broadcast_code_list.size()) {
@@ -287,6 +398,9 @@ void SetProgramOption(int argc, const char *argv[]) {
   cmd.add<std::string>("code", 'c', "Register device broadcast code", false);
   cmd.add("log", 'l', "Save the log file");
   cmd.add<int>("time", 't', "Time to save point cloud to the lvx file", false);
+  cmd.add<std::string>("format", 'f', "Output format: lvx or pcd", false, "lvx");
+  cmd.add<std::string>("arduino", 'a', "Arduino serial port, e.g. /dev/ttyACM0", false);
+  cmd.add<int>("baud", 'b', "Arduino serial baud rate", false, 115200);
   cmd.add("param", 'p', "Get the extrinsic parameter from extrinsic.xml file");
   cmd.add("help", 'h', "Show help");
   cmd.parse_check(argc, const_cast<char **>(argv));
@@ -309,9 +423,31 @@ void SetProgramOption(int argc, const char *argv[]) {
     printf("Time to save point cloud to the lvx file:%d.\n", cmd.get<int>("time"));
     lvx_file_save_time = cmd.get<int>("time");
   }
+  if (cmd.exist("format")) {
+    std::string format = cmd.get<std::string>("format");
+    if (format == "pcd") {
+      output_format = kOutputPcd;
+      printf("Output format: pcd.\n");
+    } else {
+      output_format = kOutputLvx;
+      if (format != "lvx") {
+        printf("Unsupported output format '%s', fallback to lvx.\n", format.c_str());
+      } else {
+        printf("Output format: lvx.\n");
+      }
+    }
+  }
   if (cmd.exist("param")) {
     printf("Get the extrinsic parameter from extrinsic.xml file.\n");
     is_read_extrinsic_from_xml = true;
+  }
+  if (cmd.exist("arduino")) {
+    arduino_port = cmd.get<std::string>("arduino");
+    printf("Arduino serial port: %s\n", arduino_port.c_str());
+  }
+  if (cmd.exist("baud")) {
+    arduino_baud = cmd.get<int>("baud");
+    printf("Arduino baud rate: %d\n", arduino_baud);
   }
   return;
 }
@@ -360,13 +496,24 @@ int main(int argc, const char *argv[]) {
 
   WaitForExtrinsicParameter();
 
-  printf("Start initialize lvx file.\n");
-  if (!lvx_file_handler.InitLvxFile()) {
-    Uninit();
-    return -1;
+  if (!arduino_port.empty()) {
+    OpenArduinoSerial();
   }
 
-  lvx_file_handler.InitLvxFileHeader();
+  if (output_format == kOutputLvx) {
+    printf("Start initialize lvx file.\n");
+    if (!lvx_file_handler.InitLvxFile()) {
+      Uninit();
+      return -1;
+    }
+    lvx_file_handler.InitLvxFileHeader();
+  } else {
+    printf("Start initialize pcd files.\n");
+    if (!lvx_file_handler.InitPcdFile()) {
+      Uninit();
+      return -1;
+    }
+  }
 
   int i = 0;
   steady_clock::time_point last_time = steady_clock::now();
@@ -383,11 +530,24 @@ int main(int argc, const char *argv[]) {
       break;
     }
 
-    printf("Finish save %d frame to lvx file.\n", i);
-    lvx_file_handler.SaveFrameToLvxFile(point_packet_list_temp);
+    if (output_format == kOutputLvx) {
+      printf("Finish save %d frame to lvx file.\n", i);
+      lvx_file_handler.SaveFrameToLvxFile(point_packet_list_temp);
+    } else {
+      printf("Finish save %d frame to pcd file.\n", i);
+      lvx_file_handler.SaveFrameToPcdFile(point_packet_list_temp);
+    }
+
+    if (arduino_fd >= 0 && !NotifyArduinoFrameComplete()) {
+      printf("Failed to notify Arduino for frame %d\n", i);
+    }
   }
 
-  lvx_file_handler.CloseLvxFile();
+  if (output_format == kOutputLvx) {
+    lvx_file_handler.CloseLvxFile();
+  } else {
+    lvx_file_handler.ClosePcdFile();
+  }
 
   for (i = 0; i < kMaxLidarCount; ++i) {
     if (devices[i].device_state == kDeviceStateSampling) {
@@ -398,4 +558,5 @@ int main(int argc, const char *argv[]) {
 
 /** Uninitialize Livox-SDK. */
   Uninit();
+  CloseArduinoSerial();
 }

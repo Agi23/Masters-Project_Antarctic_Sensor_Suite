@@ -1,0 +1,28 @@
+{
+    "cameras":[
+       
+        {
+            "serial": "44814142",
+			"format" : "video/x-raw",
+			"pixelformat" : "GRAY8",
+			"width" : 2048,
+			"height" : 1152,
+            "framerate":"30/1",
+            "properties":
+            [
+                
+                {"property": "PtpEnable","value":"True"},
+                {"property":"OffsetAutoCenter",  "value":"On"},
+                {"property":"ReverseX",  "value":"On"},
+                {"property":"ReverseY",  "value":"On"},
+                {"property": "GainAuto",  "value":"Off"},
+                {"property":"Gain", "value":0},
+                {"property":"ExposureAuto", "value":"Off"},
+                {"property":"ExposureTime", "value":24000}
+
+
+            ],
+            "imageprefix" : "left"            
+        }
+    ]
+}

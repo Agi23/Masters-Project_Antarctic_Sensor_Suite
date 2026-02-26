@@ -25,6 +25,7 @@
 #include <time.h>
 #include <cmath>
 #include <cstring>
+#include <sstream>
 #include "lvx_file.h"
 #include "third_party/rapidxml/rapidxml.hpp"
 #include "third_party/rapidxml/rapidxml_utils.hpp"
@@ -38,7 +39,128 @@
 #define IMU_POINT_NUM     1
 #define M_PI             3.14159265358979323846
 
-LvxFileHandle::LvxFileHandle() : cur_frame_index_(0), cur_offset_(0), frame_duration_(kDefaultFrameDurationTime) {
+namespace {
+constexpr float kMmToMeter = 0.001f;
+constexpr float kDegToRad = static_cast<float>(M_PI / 180.0);
+
+inline void SphericalToCartesian(uint32_t depth_mm, uint16_t theta_centideg, uint16_t phi_centideg, PcdPoint &point) {
+  const float radius = static_cast<float>(depth_mm) * kMmToMeter;
+  const float theta = static_cast<float>(theta_centideg) * 0.01f * kDegToRad;
+  const float phi = static_cast<float>(phi_centideg) * 0.01f * kDegToRad;
+  const float xy = radius * std::sin(theta);
+  point.x = xy * std::cos(phi);
+  point.y = xy * std::sin(phi);
+  point.z = radius * std::cos(theta);
+}
+
+inline void AppendCartesianPoint(int32_t x_mm, int32_t y_mm, int32_t z_mm, uint8_t reflectivity,
+                                 std::vector<PcdPoint> &points) {
+  PcdPoint p;
+  p.x = static_cast<float>(x_mm) * kMmToMeter;
+  p.y = static_cast<float>(y_mm) * kMmToMeter;
+  p.z = static_cast<float>(z_mm) * kMmToMeter;
+  p.intensity = static_cast<float>(reflectivity);
+  points.push_back(p);
+}
+
+void AppendPointsFromPacket(const LvxBasePackDetail &packet, std::vector<PcdPoint> &points) {
+  switch (packet.data_type) {
+    case PointDataType::kCartesian: {
+      auto *raw = reinterpret_cast<const LivoxRawPoint *>(packet.raw_point);
+      for (int i = 0; i < RAW_POINT_NUM; ++i) {
+        AppendCartesianPoint(raw[i].x, raw[i].y, raw[i].z, raw[i].reflectivity, points);
+      }
+      break;
+    }
+    case PointDataType::kSpherical: {
+      auto *raw = reinterpret_cast<const LivoxSpherPoint *>(packet.raw_point);
+      for (int i = 0; i < RAW_POINT_NUM; ++i) {
+        PcdPoint p;
+        SphericalToCartesian(raw[i].depth, raw[i].theta, raw[i].phi, p);
+        p.intensity = static_cast<float>(raw[i].reflectivity);
+        points.push_back(p);
+      }
+      break;
+    }
+    case PointDataType::kExtendCartesian: {
+      auto *raw = reinterpret_cast<const LivoxExtendRawPoint *>(packet.raw_point);
+      for (int i = 0; i < SINGLE_POINT_NUM; ++i) {
+        AppendCartesianPoint(raw[i].x, raw[i].y, raw[i].z, raw[i].reflectivity, points);
+      }
+      break;
+    }
+    case PointDataType::kExtendSpherical: {
+      auto *raw = reinterpret_cast<const LivoxExtendSpherPoint *>(packet.raw_point);
+      for (int i = 0; i < SINGLE_POINT_NUM; ++i) {
+        PcdPoint p;
+        SphericalToCartesian(raw[i].depth, raw[i].theta, raw[i].phi, p);
+        p.intensity = static_cast<float>(raw[i].reflectivity);
+        points.push_back(p);
+      }
+      break;
+    }
+    case PointDataType::kDualExtendCartesian: {
+      auto *raw = reinterpret_cast<const LivoxDualExtendRawPoint *>(packet.raw_point);
+      for (int i = 0; i < DUAL_POINT_NUM; ++i) {
+        AppendCartesianPoint(raw[i].x1, raw[i].y1, raw[i].z1, raw[i].reflectivity1, points);
+        AppendCartesianPoint(raw[i].x2, raw[i].y2, raw[i].z2, raw[i].reflectivity2, points);
+      }
+      break;
+    }
+    case PointDataType::kDualExtendSpherical: {
+      auto *raw = reinterpret_cast<const LivoxDualExtendSpherPoint *>(packet.raw_point);
+      for (int i = 0; i < DUAL_POINT_NUM; ++i) {
+        PcdPoint p1;
+        SphericalToCartesian(raw[i].depth1, raw[i].theta, raw[i].phi, p1);
+        p1.intensity = static_cast<float>(raw[i].reflectivity1);
+        points.push_back(p1);
+        PcdPoint p2;
+        SphericalToCartesian(raw[i].depth2, raw[i].theta, raw[i].phi, p2);
+        p2.intensity = static_cast<float>(raw[i].reflectivity2);
+        points.push_back(p2);
+      }
+      break;
+    }
+    case PointDataType::kTripleExtendCartesian: {
+      auto *raw = reinterpret_cast<const LivoxTripleExtendRawPoint *>(packet.raw_point);
+      for (int i = 0; i < TRIPLE_POINT_NUM; ++i) {
+        AppendCartesianPoint(raw[i].x1, raw[i].y1, raw[i].z1, raw[i].reflectivity1, points);
+        AppendCartesianPoint(raw[i].x2, raw[i].y2, raw[i].z2, raw[i].reflectivity2, points);
+        AppendCartesianPoint(raw[i].x3, raw[i].y3, raw[i].z3, raw[i].reflectivity3, points);
+      }
+      break;
+    }
+    case PointDataType::kTripleExtendSpherical: {
+      auto *raw = reinterpret_cast<const LivoxTripleExtendSpherPoint *>(packet.raw_point);
+      for (int i = 0; i < TRIPLE_POINT_NUM; ++i) {
+        PcdPoint p1;
+        SphericalToCartesian(raw[i].depth1, raw[i].theta, raw[i].phi, p1);
+        p1.intensity = static_cast<float>(raw[i].reflectivity1);
+        points.push_back(p1);
+        PcdPoint p2;
+        SphericalToCartesian(raw[i].depth2, raw[i].theta, raw[i].phi, p2);
+        p2.intensity = static_cast<float>(raw[i].reflectivity2);
+        points.push_back(p2);
+        PcdPoint p3;
+        SphericalToCartesian(raw[i].depth3, raw[i].theta, raw[i].phi, p3);
+        p3.intensity = static_cast<float>(raw[i].reflectivity3);
+        points.push_back(p3);
+      }
+      break;
+    }
+    case PointDataType::kImu:
+    default:
+      break;
+  }
+}
+}  // namespace
+
+LvxFileHandle::LvxFileHandle()
+    : cur_frame_index_(0),
+      cur_offset_(0),
+      frame_duration_(kDefaultFrameDurationTime),
+      pcd_base_name_(),
+      pcd_frame_index_(0) {
 }
 
 bool LvxFileHandle::InitLvxFile() {
@@ -52,6 +174,16 @@ bool LvxFileHandle::InitLvxFile() {
   if (!lvx_file_.is_open()) {
     return false;
   }
+  return true;
+}
+
+bool LvxFileHandle::InitPcdFile() {
+  time_t curtime = time(nullptr);
+  char basename[30] = {0};
+  tm *local_time = localtime(&curtime);
+  strftime(basename, sizeof(basename), "%Y-%m-%d_%H-%M-%S", local_time);
+  pcd_base_name_ = basename;
+  pcd_frame_index_ = 0;
   return true;
 }
 
@@ -121,6 +253,39 @@ void LvxFileHandle::SaveFrameToLvxFile(std::list<LvxBasePackDetail> &point_packe
 
   cur_offset_ = frame_header.next_offset;
   cur_frame_index_++;
+}
+
+void LvxFileHandle::SaveFrameToPcdFile(std::list<LvxBasePackDetail> &point_packet_list_temp) {
+  std::vector<PcdPoint> points;
+  points.reserve(point_packet_list_temp.size() * RAW_POINT_NUM);
+
+  for (const auto &packet : point_packet_list_temp) {
+    AppendPointsFromPacket(packet, points);
+  }
+
+  std::ostringstream filename;
+  filename << pcd_base_name_ << "_frame_" << pcd_frame_index_ << ".pcd";
+  std::ofstream pcd_file(filename.str(), std::ios::out);
+  if (!pcd_file.is_open()) {
+    return;
+  }
+
+  pcd_file << "# .PCD v0.7 - Point Cloud Data file format\n";
+  pcd_file << "VERSION 0.7\n";
+  pcd_file << "FIELDS x y z intensity\n";
+  pcd_file << "SIZE 4 4 4 4\n";
+  pcd_file << "TYPE F F F F\n";
+  pcd_file << "COUNT 1 1 1 1\n";
+  pcd_file << "WIDTH " << points.size() << "\n";
+  pcd_file << "HEIGHT 1\n";
+  pcd_file << "VIEWPOINT 0 0 0 1 0 0 0\n";
+  pcd_file << "POINTS " << points.size() << "\n";
+  pcd_file << "DATA ascii\n";
+
+  for (const auto &point : points) {
+    pcd_file << point.x << " " << point.y << " " << point.z << " " << point.intensity << "\n";
+  }
+  pcd_frame_index_++;
 }
 
 void LvxFileHandle::CloseLvxFile() {

@@ -26,6 +26,7 @@
 #include <memory>
 #include <fstream>
 #include <list>
+#include <string>
 #include <vector>
 #include <mutex>
 #include "livox_sdk.h"
@@ -92,6 +93,13 @@ typedef struct {
   uint64_t frame_index;
 } FrameHeader;
 
+typedef struct {
+  float x;
+  float y;
+  float z;
+  float intensity;
+} PcdPoint;
+
 #pragma pack()
 
 class LvxFileHandle {
@@ -99,9 +107,12 @@ public:
   LvxFileHandle();
 
   bool InitLvxFile();
+  bool InitPcdFile();
   void InitLvxFileHeader();
   void SaveFrameToLvxFile(std::list<LvxBasePackDetail> &point_packet_list_temp);
+  void SaveFrameToPcdFile(std::list<LvxBasePackDetail> &point_packet_list_temp);
   void CloseLvxFile();
+  void ClosePcdFile() { pcd_base_name_.clear(); };
 
   void AddDeviceInfo(LvxDeviceInfo &info) { device_info_list_.push_back(info); };
   int GetDeviceInfoListSize() { return device_info_list_.size(); }
@@ -114,6 +125,8 @@ private:
   uint32_t cur_frame_index_;
   uint64_t cur_offset_;
   uint32_t frame_duration_;
+  std::string pcd_base_name_;
+  uint32_t pcd_frame_index_;
 };
 
 void ParseExtrinsicXml(DeviceItem &item, LvxDeviceInfo &info);
