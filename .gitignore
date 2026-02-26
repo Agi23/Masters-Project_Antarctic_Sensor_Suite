@@ -1,0 +1,31 @@
+# Data (do not version raw or large data)
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+
+# MATLAB
+*.asv
+*.m~
+slprj/
+
+# C / C++
+build/
+*.o
+*.a
+*.so
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
