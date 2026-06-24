@@ -63,7 +63,7 @@ OutputFormat output_format = kOutputLvx;
  * This is applied once to extrinsic metadata (not per point).
  */
 constexpr float kMountRollOffsetDeg = 0.0f;
-constexpr float kMountPitchOffsetDeg = 180.0f;
+constexpr float kMountPitchOffsetDeg = 0.0f;
 constexpr float kMountYawOffsetDeg = 0.0f;
 
 using namespace std::chrono;
