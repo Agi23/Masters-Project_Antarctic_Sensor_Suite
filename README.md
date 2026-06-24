@@ -1,24 +1,20 @@
-# Full Sensor Suite – Master's Research
+# Antarctic Sensor Suite – Master's Research
 
 ## Overview
-This repository contains the code, documentation, and results for my Master's
-research project involving a multi-sensor suite comprising:
 
-- Thermal camera
-- LiDAR
-- Stereo camera system
+This repository contains the software for software-synchronized multi-sensor data capture as part of a Master's research project.
+The active code lives in [`src/Software_Sync/`](src/Software_Sync/).
 
-The goal of this work is to support synchronized data capture, calibration,
-and analysis for environmental sensing applications.
+## Quick Start
 
-## Repository Structure
-- `src/Thermal/` – Thermal camera code and scripts
-- `src/LiDAR/` – LiDAR drivers, SDKs, and processing code
-- `src/Stereo/` – Stereo camera capture and calibration code
-- `data/` – Data directory (raw data excluded from version control)
-- `results/` – Generated figures, outputs, and processed results
-- `docs/` – Documentation, notes, and thesis-related material
+```bash
+cd src/Software_Sync
+./run_capture.sh --frames 100 --lidar-format lvx
+```
+
+See [`src/Software_Sync/README.md`](src/Software_Sync/README.md) for full usage.
 
 ## Notes
-Raw sensor data is intentionally excluded from version control.
 
+- Raw sensor data (`captures/`) is excluded from version control via `.gitignore`.
+- `src/Hardware_Sync/` is not tracked on this branch.

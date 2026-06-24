@@ -1,3 +1,0 @@
-camera,serial,frame_index,unix_time_ns,image_file,meta_frame_count,meta_frames_dropped,meta_capture_time_ns,meta_camera_time_ns,meta_is_damaged
-left,44814142,1,1772205169544106878,left_000001_1772205169544106878.png,1,0,1772205169450741000,5107199787810,False
-right,44814140,1,1772205169737064241,right_000001_1772205169737064241.png,1,0,1772205169645641000,5107394643873,False

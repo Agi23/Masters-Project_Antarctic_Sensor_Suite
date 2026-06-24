@@ -1,3 +1,4 @@
 captures/
 scripts/__pycache__/
 lidar/src/build/
+.claude/

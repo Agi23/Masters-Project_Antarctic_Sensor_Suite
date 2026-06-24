@@ -1,3 +1,6 @@
+# Hardware sync folder (not part of this branch's scope)
+src/Hardware_Sync/
+
 # Data (do not version raw or large data)
 data/
 
